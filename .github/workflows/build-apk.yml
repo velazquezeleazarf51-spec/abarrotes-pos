@@ -1,0 +1,109 @@
+name: APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      accion:
+        description: "Que hacer"
+        type: choice
+        default: compilar-apk
+        options:
+          - compilar-apk
+          - crear-llave
+
+jobs:
+  llave:
+    if: ${{ inputs.accion == 'crear-llave' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Crear llave
+        run: |
+          set -e
+          mkdir llave
+          PASS=$(openssl rand -hex 12)
+          keytool -genkeypair -keystore llave/abarrotes.jks -alias abarrotes -keyalg RSA -keysize 2048 -validity 10000 -storetype PKCS12 -storepass "$PASS" -keypass "$PASS" -dname "CN=Abarrotes POS, O=Tienda, C=MX"
+          base64 -w0 llave/abarrotes.jks > llave/1-KEYSTORE_BASE64.txt
+          echo -n "$PASS" > llave/2-KEYSTORE_PASSWORD.txt
+          echo -n "abarrotes" > llave/3-KEY_ALIAS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llave-secreta
+          path: llave/*
+          retention-days: 3
+
+  apk:
+    if: ${{ inputs.accion == 'compilar-apk' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descomprimir proyecto
+        run: |
+          ZIP=$(ls *.zip | head -1)
+          echo "Usando $ZIP"
+          unzip -q "$ZIP"
+          ls
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instalar dependencias
+        working-directory: abarrotes-apk
+        run: npm install
+
+      - name: Copiar librerias de PDF
+        working-directory: abarrotes-apk
+        run: node scripts/prepare-www.js
+
+      - name: Crear proyecto Android
+        working-directory: abarrotes-apk
+        run: npx cap add android
+
+      - name: Ajustar Android
+        working-directory: abarrotes-apk
+        run: node scripts/patch-android.js
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+
+      - name: Sincronizar
+        working-directory: abarrotes-apk
+        run: npx cap sync android
+
+      - name: Compilar APK
+        working-directory: abarrotes-apk
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          set -e
+          cd android
+          chmod +x gradlew
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            ./gradlew assembleRelease --no-daemon
+            BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            UNSIGNED=$(ls app/build/outputs/apk/release/*.apk | head -1)
+            "$BT/zipalign" -p -f 4 "$UNSIGNED" "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias "$KEY_ALIAS" --ks-pass env:KS_PASS --out ../abarrotes-pos.apk "$RUNNER_TEMP/aligned.apk"
+            "$BT/apksigner" verify ../abarrotes-pos.apk
+          else
+            echo "::warning::No hay llave (secrets). APK de PRUEBA, no para repartir."
+            ./gradlew assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk ../abarrotes-pos-DEBUG.apk
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: abarrotes-pos-apk
+          path: abarrotes-apk/abarrotes-pos*.apk
