@@ -58,29 +58,29 @@ jobs:
           java-version: 21
 
       - name: Instalar dependencias
-        working-directory: abarrotes-apk
+        working-directory: abarrotes01-apk
         run: npm install
 
       - name: Copiar librerias de PDF
-        working-directory: abarrotes-apk
+        working-directory: abarrotes01-apk
         run: node scripts/prepare-www.js
 
       - name: Crear proyecto Android
-        working-directory: abarrotes-apk
+        working-directory: abarrotes01-apk
         run: npx cap add android
 
       - name: Ajustar Android
-        working-directory: abarrotes-apk
+        working-directory: abarrotes01-apk
         run: node scripts/patch-android.js
         env:
           VERSION_CODE: ${{ github.run_number }}
 
       - name: Sincronizar
-        working-directory: abarrotes-apk
+        working-directory: abarrotes01-apk
         run: npx cap sync android
 
       - name: Compilar APK
-        working-directory: abarrotes-apk
+        working-directory: abarrotes01-apk
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -106,4 +106,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: abarrotes-pos-apk
-          path: abarrotes-apk/abarrotes-pos*.apk
+          path: abarrotes01-apk/abarrotes-pos*.apk
